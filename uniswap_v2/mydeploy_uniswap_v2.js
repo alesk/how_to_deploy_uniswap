@@ -25,21 +25,30 @@ const contracts_addresses = {
 }
 */
 
-let deployContract = async function (name, web3, owner) {
-
-    let contractAddress = deployed_contracts[name];
+let deployContract = async function(web3, name, owner) {
     let abi = data.abi[name];
     let bytecode = data.bytecode[name];
+    return await deployContractRaw(web3, name, owner, abi, bytecode);
+}
+
+let deployContractRaw = async function (web3, name, owner, abi, bytecode) {
+
+    let contractAddress = deployed_contracts[name];
+    console.log('Deploying contract %s by %s. Abi length %d, bytecode length %d', name, owner, abi.length, bytecode.length);
 
     if (!contractAddress) {
         let contract = await web3.eth.sendTransaction({
             from: owner,
-            data: bytecode})
+            data: bytecode
+        })
             .on('error', console.error)
             .on('transactionHash', transactionHash => console.log('Contract %s deployed with transaction Hash is %s', name, transactionHash))
             .then(x => {
                 contractAddress = x.contractAddress;
                 console.log('%s is was mined in block %d and has address: %s', name, x.blockNumber, x.contractAddress)
+            })
+            .catch((error) => {
+                console.log(error);
             });
     } else {
         console.log('Contract \033[35m%s\033[0m already deployed at %s', name, contractAddress);
@@ -50,6 +59,54 @@ let deployContract = async function (name, web3, owner) {
 }
 
 
+let deployUniswap = async function(web3, owner) {
+
+    // Uniswap V2
+    let uniswapV2 = await deployContract(web3, 'uniswap_v2', owner)
+    deployed_contracts['uniswap_v2'] = uniswapV2._address;
+
+    await uniswapV2.methods.feeTo().call().then(x => console.log('Fee to is %s', x));
+    await uniswapV2.methods.feeToSetter().call().then(x => console.log('Fee to setter  is %s', x));
+
+    // Uniswap WETH
+    let weth = await deployContract(web3, 'weth', owner)
+    deployed_contracts['weth'] = weth._address;
+
+    // Uniswap V2 Router
+    let router = await deployContract(web3, 'router', owner)
+    deployed_contracts['router'] = router._address;
+
+    // Uniswap Multicall
+    let multicall = await deployContract(web3, 'multicall', owner)
+    deployed_contracts['multicall'] = multicall._address;
+
+    // Uniswap Migrator
+    let migrator = await deployContract(web3, 'migrator', owner)
+    deployed_contracts['migrator'] = migrator._address;
+
+    // ENS registry 
+    let ens_registry = await deployContract(web3, 'ens_registry', owner)
+    deployed_contracts['ens_registry'] = ens_registry._address;
+
+    // Gas relay
+    let gas_relay_hub_address = await deployContract(web3, 'gas_relay_hub_address', owner)
+    deployed_contracts['gas_relay_hub_address'] = gas_relay_hub_address._address;
+}
+
+let deployTokens = async function(web3, owner) {
+    let moonToken = JSON.parse(fs.readFileSync('../../../uniswap-learning/build/contracts/MOONToken.json').toString());
+
+    // https://www.reddit.com/r/ethdev/comments/eeehr7/deploy_a_contract_with_constructor_arguments_with/
+    let params = web3.eth.abi.encodeParameters(['uint256'], ['1000']).slice(2)
+    let moonTokenAddress = await deployContractRaw(web3, 'moon_token', owner, moonToken.abi, moonToken.bytecode+params);
+    deployed_contracts['moon_token'] = moonTokenAddress._address;
+
+    
+    let wokeToken = JSON.parse(fs.readFileSync('../../../uniswap-learning/build/contracts/WOKEToken.json').toString());
+    let wokeTokenAddress = await deployContractRaw(web3, 'woke_token', owner, wokeToken.abi, wokeToken.bytecode+params);
+    deployed_contracts['woke_token'] = wokeTokenAddress._address;    
+}
+
 let main = async function() {
 
     const provider = new HDWalletProvider(
@@ -57,45 +114,16 @@ let main = async function() {
     const web3 = new Web3(provider);
     await web3.eth.net.isListening();
 
+    // Accounts
     let [alice, bob, charlie] = await web3.eth.getAccounts();
 
-    // Uniswap V2
-    let uniswapV2 = await deployContract('uniswap_v2', web3, charlie)
-    deployed_contracts['uniswap_v2'] = uniswapV2._address;
+   await deployUniswap(web3, charlie);
+   await deployTokens(web3, charlie);
 
-    await uniswapV2.methods.feeTo().call().then(x => console.log('Fee to is %s', x));
-    await uniswapV2.methods.feeToSetter().call().then(x => console.log('Fee to setter  is %s', x));
-
-    // Uniswap WETH
-    let weth = await deployContract('weth', web3, charlie)
-    deployed_contracts['weth'] = weth._address;
-
-    // Uniswap V2 Router
-    let router = await deployContract('router', web3, charlie)
-    deployed_contracts['router'] = router._address;
-
-    // Uniswap Multicall
-    let multicall = await deployContract('multicall', web3, charlie)
-    deployed_contracts['multicall'] = multicall._address;
-
-    // Uniswap Migrator
-    let migrator = await deployContract('migrator', web3, charlie)
-    deployed_contracts['migrator'] = migrator._address;
-
-
-    // ENS registry 
-    let ens_registry = await deployContract('ens_registry', web3, charlie)
-    deployed_contracts['ens_registry'] = ens_registry._address;
-
-    // Gas relay
-    let gas_relay_hub_address = await deployContract('gas_relay_hub_address', web3, charlie)
-    deployed_contracts['gas_relay_hub_address'] = gas_relay_hub_address._address;
-
-
-    
     console.log('Deployed contract addresses written to %s', deployed_contracts_file);
+    console.log(deployed_contracts);
     fs.writeFileSync(deployed_contracts_file, JSON.stringify(deployed_contracts, null, 4));
     provider.engine.stop();
 }
 
-main()
+main();
